@@ -1,0 +1,344 @@
+// Copyright 2026 Workloom Solutions Private Limited
+// SPDX-License-Identifier: MIT
+
+package cli
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime/debug"
+	"strings"
+	"testing"
+
+	"github.com/tetriz-ai/leadscore/internal/logredact"
+)
+
+func run(args ...string) (code int, stdout, stderr string) {
+	var out, errb bytes.Buffer
+	code = Main(args, &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func TestParse(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		cmd   string
+		pos   []string
+		flags map[string]string
+	}{
+		{"global flags before", []string{"--config", "a.yml", "--rubric", "r.yml", "doctor"}, "doctor", nil,
+			map[string]string{"config": "a.yml", "rubric": "r.yml"}},
+		{"global flags after", []string{"doctor", "--config", "a.yml", "-rubric", "r.yml"}, "doctor", nil,
+			map[string]string{"config": "a.yml", "rubric": "r.yml"}},
+		{"equals form", []string{"config", "get", "--config=a.yml", "store.type"}, "config get", []string{"store.type"},
+			map[string]string{"config": "a.yml"}},
+		{"value starting with dash via equals", []string{"run", "--config=-odd.yml"}, "run", nil,
+			map[string]string{"config": "-odd.yml"}},
+		{"between command words", []string{"config", "--config", "a.yml", "set-hosting", "project=p"}, "config set-hosting",
+			[]string{"project=p"}, map[string]string{"config": "a.yml"}},
+		{"bool flag", []string{"run", "--dry-run"}, "run", nil, map[string]string{"dry-run": ""}},
+		{"flags among positionals", []string{"retry", "a@example.com", "--lane", "warm"}, "retry", []string{"a@example.com"},
+			map[string]string{"lane": "warm"}},
+		{"every without a value", []string{"serve", "--every"}, "serve", nil, map[string]string{"every": ""}},
+		{"every with a value", []string{"serve", "--every", "5m"}, "serve", nil, map[string]string{"every": "5m"}},
+		{"every with equals", []string{"serve", "--every=1d"}, "serve", nil, map[string]string{"every": "1d"}},
+		{"every then a flag", []string{"serve", "--every", "--config", "a.yml"}, "serve", nil,
+			map[string]string{"every": "", "config": "a.yml"}},
+		{"double dash ends flags", []string{"explain", "--", "--odd"}, "explain", []string{"--odd"}, map[string]string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv, err := parse(tt.args)
+			if err != nil {
+				t.Fatalf("parse(%q): %v", tt.args, err)
+			}
+			if inv.cmd.name() != tt.cmd {
+				t.Errorf("command = %q, want %q", inv.cmd.name(), tt.cmd)
+			}
+			if len(inv.args) != len(tt.pos) || (len(tt.pos) > 0 && !reflect.DeepEqual(inv.args, tt.pos)) {
+				t.Errorf("args = %q, want %q", inv.args, tt.pos)
+			}
+			if !reflect.DeepEqual(inv.flags, tt.flags) {
+				t.Errorf("flags = %v, want %v", inv.flags, tt.flags)
+			}
+		})
+	}
+}
+
+func TestParseErrors(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{}, "no command"},
+		{[]string{"nope"}, "unknown command"},
+		{[]string{"config"}, "incomplete command"},
+		{[]string{"config", "nope"}, "unknown command"},
+		{[]string{"--dry-run", "run"}, "before the command"},
+		{[]string{"run", "--csv"}, "unknown flag"},
+		{[]string{"run", "--dry-run=yes"}, "takes no value"},
+		{[]string{"run", "--config"}, "needs a value"},
+		{[]string{"run", "--config", "--dry-run"}, "needs a value"},
+		{[]string{"run", "--config="}, "non-empty"},
+		{[]string{"run", "--rubric", ""}, "non-empty"},
+		{[]string{"serve", "--every", "soon"}, "not a duration"},
+		{[]string{"serve", "--every=0s"}, "longer than zero"},
+		{[]string{"serve", "extra"}, "argument"},
+		{[]string{"explain"}, "argument"},
+		{[]string{"merge", "a", "b", "c"}, "argument"},
+		{[]string{"config", "set-hosting"}, "argument"},
+	}
+	for _, tt := range tests {
+		_, err := parse(tt.args)
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("parse(%q) err = %v, want it to contain %q", tt.args, err, tt.want)
+		}
+	}
+}
+
+func TestUsageErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{},
+		{"nope"},
+		{"config"},
+		{"config", "nope"},
+		{"run", "--csv"},
+		{"--dry-run", "run"},
+		{"explain"},
+		{"set-status", "a@example.com"},
+		{"merge", "a", "b", "c"},
+		{"retry", "a", "b"},
+		{"run", "--config"},
+		{"run", "--dry-run=yes"},
+		{"config", "get"},
+		{"config", "set-hosting"},
+	} {
+		code, _, _ := run(args...)
+		if code != exitUsage {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+}
+
+func TestHelp(t *testing.T) {
+	for _, args := range [][]string{{"help"}, {"--help"}, {"-h"}, {"--config", "a.yml", "-h"}} {
+		code, stdout, _ := run(args...)
+		if code != exitOK || !strings.Contains(stdout, "config set-hosting") {
+			t.Errorf("%v: exit %d, stdout %q", args, code, stdout)
+		}
+	}
+	code, stdout, _ := run("help")
+	for _, want := range []string{"\nSet up:\n", "\nRun:\n", "\nInspect:\n", "\nFix:\n", "Overrides: the table", "Health: the table"} {
+		if code != exitOK || !strings.Contains(stdout, want) {
+			t.Errorf("help lacks %q: %q", want, stdout)
+		}
+	}
+}
+
+// Every command's description in help starts in one column, on the next line
+// when its usage is too long for the column.
+func TestHelpColumnsAlign(t *testing.T) {
+	_, stdout, _ := run("help")
+	for _, c := range commands {
+		want := fmt.Sprintf("  %-*s %s\n", usageWidth, c.usageLine(), c.help)
+		if len(c.usageLine()) > usageWidth {
+			want = "  " + c.usageLine() + "\n" + strings.Repeat(" ", 3+usageWidth) + c.help + "\n"
+		}
+		if !strings.Contains(stdout, "\n"+want) {
+			t.Errorf("help does not align %q", c.name())
+		}
+	}
+}
+
+// Every command is listed in exactly one help group.
+func TestEveryCommandInOneGroup(t *testing.T) {
+	seen := map[string]int{}
+	for _, g := range groups {
+		for _, n := range g.commands {
+			seen[n]++
+		}
+	}
+	for _, c := range commands {
+		if seen[c.name()] != 1 {
+			t.Errorf("command %q is in %d help groups, want 1", c.name(), seen[c.name()])
+		}
+		delete(seen, c.name())
+	}
+	for n := range seen {
+		t.Errorf("help group lists %q, which is not a command", n)
+	}
+}
+
+// `leadscore <cmd> --help`, `-h` and `leadscore help <cmd>` print that
+// command's usage line and one sentence, exit 0, even when its arguments are
+// missing; `help nope` is an unknown command.
+func TestCommandHelp(t *testing.T) {
+	for _, c := range commands {
+		want := "Usage: leadscore " + c.usageLine() + " [--config <file>] [--rubric <file>]\n"
+		for _, args := range [][]string{
+			append(append([]string{}, c.path...), "--help"),
+			append(append([]string{}, c.path...), "-h"),
+			append([]string{"help"}, c.path...),
+			append([]string{"--config", "a.yml", "help"}, c.path...),
+		} {
+			code, stdout, stderr := run(args...)
+			if code != exitOK || !strings.HasPrefix(stdout, want) || strings.Count(stdout, "\n") != 2 || stderr != "" {
+				t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, stdout, stderr)
+			}
+		}
+	}
+	if code, _, stderr := run("help", "nope"); code != exitUsage || !strings.Contains(stderr, `unknown command "nope"`) {
+		t.Errorf("help nope: %d %q", code, stderr)
+	}
+}
+
+// A known command with missing or extra arguments prints its own usage line
+// and exits 2, never "unknown command".
+func TestWrongArgumentsPrintCommandUsage(t *testing.T) {
+	for _, args := range [][]string{{"explain"}, {"explain", "a", "b"}, {"status", "now"}, {"merge", "a"},
+		{"config", "get"}, {"setup", "sheet", "x"}, {"run", "--csv"}, {"retry", "a", "b"}} {
+		code, _, stderr := run(args...)
+		c, _ := match(args[:len(args)-1])
+		if c == nil {
+			c, _ = match(args)
+		}
+		if c == nil {
+			c, _ = match(args[:1])
+		}
+		if code != exitUsage || strings.Contains(stderr, "unknown command") || c == nil ||
+			!strings.Contains(stderr, "Usage: leadscore "+c.usageLine()) || strings.Contains(stderr, "Inspect:") {
+			t.Errorf("%v: exit %d, stderr %q", args, code, stderr)
+		}
+	}
+}
+
+func TestVersion(t *testing.T) {
+	for _, args := range [][]string{{"version"}, {"--version"}} {
+		code, stdout, _ := run(args...)
+		if code != exitOK || !strings.HasPrefix(stdout, "leadscore dev") {
+			t.Errorf("%v: exit %d, stdout %q", args, code, stdout)
+		}
+	}
+	old := Version
+	Version = "v1.2.3"
+	t.Cleanup(func() { Version = old })
+	if code, stdout, _ := run("version"); code != exitOK || stdout != "leadscore v1.2.3\n" {
+		t.Errorf("a release build prints its version: %d %q", code, stdout)
+	}
+}
+
+func TestConfigGetAndSetHosting(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "leadscore.yml")
+	if err := os.WriteFile(cfg, []byte("# keep me\nversion: 1\nstore: { type: sqlite } # local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run("config", "get", "store.path", "--config", cfg)
+	if code != exitOK || stdout != "/data/leadscore.db\n" {
+		t.Fatalf("config get store.path: exit %d, out %q, err %q", code, stdout, stderr)
+	}
+	if code, _, _ = run("--config", cfg, "config", "get", "hosting.project"); code != exitFail {
+		t.Fatalf("config get of an unset key: exit %d, want 1", code)
+	}
+
+	code, _, stderr = run("--config", cfg, "config", "set-hosting", "project=p1", "region=asia-south1")
+	if code != exitOK {
+		t.Fatalf("set-hosting: exit %d, err %q", code, stderr)
+	}
+	code, stdout, _ = run("--config", cfg, "config", "get", "hosting.project")
+	if code != exitOK || stdout != "p1\n" {
+		t.Fatalf("after set-hosting: exit %d, out %q", code, stdout)
+	}
+	data, _ := os.ReadFile(cfg)
+	if !strings.Contains(string(data), "# keep me") || !strings.Contains(string(data), "# local") {
+		t.Errorf("comments lost:\n%s", data)
+	}
+	if fi, _ := os.Stat(cfg); fi.Mode().Perm() != 0o600 {
+		t.Errorf("file mode changed to %v", fi.Mode().Perm())
+	}
+
+	if code, _, _ = run("--config", cfg, "config", "set-hosting", "zone=x"); code != exitFail {
+		t.Errorf("set-hosting with an unknown key: exit %d, want 1", code)
+	}
+	if code, _, _ = run("--config", filepath.Join(dir, "missing.yml"), "config", "get", "version"); code != exitFail {
+		t.Errorf("config get with a missing file: exit %d, want 1", code)
+	}
+}
+
+func TestEveryCommandIsReachable(t *testing.T) {
+	for _, c := range commands {
+		cmd, _ := match(c.path)
+		if cmd != c {
+			t.Errorf("command %q cannot be reached", c.name())
+		}
+		if c.run == nil {
+			t.Errorf("command %q has no body", c.name())
+		}
+	}
+}
+
+// failWith runs a command that fails with an error naming a home-folder path
+// and an email: config get on a missing file under /Users/x.
+func failWith(t *testing.T) string {
+	t.Helper()
+	code, _, stderr := run("--config", "/Users/x/leadscore.yml", "config", "get", "hosting.run_account")
+	if code != exitFail {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	return stderr
+}
+
+func TestErrorsUnredactedLocally(t *testing.T) {
+	t.Setenv("K_SERVICE", "")
+	t.Setenv("CLOUD_RUN_JOB", "")
+	if got := failWith(t); !strings.Contains(got, "/Users/x/leadscore.yml") {
+		t.Errorf("a local error must show the operator's own path, got %q", got)
+	}
+}
+
+func TestErrorsRedactedInsideCloudRun(t *testing.T) {
+	for _, v := range []string{"K_SERVICE", "CLOUD_RUN_JOB"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("K_SERVICE", "")
+			t.Setenv("CLOUD_RUN_JOB", "")
+			t.Setenv(v, "leadscore")
+			got := failWith(t)
+			if strings.Contains(got, "/Users/x/") || !strings.Contains(got, "~/leadscore.yml") {
+				t.Errorf("inside Cloud Run stderr is a log and must be redacted, got %q", got)
+			}
+		})
+	}
+}
+
+func TestMainMasksKeyValuesFromTheEnvironment(t *testing.T) {
+	t.Setenv("APOLLO_API_KEY", "apollo-test-value-123")
+	t.Cleanup(func() { logredact.MaskEnvSecrets(func(string) string { return "" }) })
+	run("help")
+	if got := logredact.Redact("call failed with key apollo-test-value-123"); strings.Contains(got, "apollo-test-value-123") {
+		t.Errorf("after Main starts, Redact must mask APOLLO_API_KEY's value, got %q", got)
+	}
+}
+
+// A binary from `go install ...@<version>` sets no Version but carries its
+// module version: it prints that, not dev.
+func TestVersionFromGoInstall(t *testing.T) {
+	old := readBuildInfo
+	t.Cleanup(func() { readBuildInfo = old })
+	for mod, want := range map[string]string{
+		"v0.1.0":  "leadscore v0.1.0\n",
+		"(devel)": "leadscore dev\n",
+		"":        "leadscore dev\n",
+	} {
+		readBuildInfo = func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Path: "github.com/tetriz-ai/leadscore", Version: mod}}, true
+		}
+		if code, stdout, _ := run("version"); code != exitOK || stdout != want {
+			t.Errorf("module version %q: exit %d, stdout %q, want %q", mod, code, stdout, want)
+		}
+	}
+}

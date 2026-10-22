@@ -1,0 +1,40 @@
+{
+  "kind": "ranking",
+  "accent": "#2c7970",
+  "brand": "LEADSCORE",
+  "titles": [
+    "Turn a lead list into a clear priority.",
+    "See why a lead rises to the top.",
+    "Change your rubric. Priorities move.",
+    "The right leads. The right list."
+  ],
+  "names": [
+    "Anna Weber",
+    "Jonas Brandt",
+    "Lea de Vries"
+  ],
+  "footers": [
+    "Illustrated offline results \u00b7 eight made-up sample leads",
+    "Actual sample score: 40 company + 10 region + 15 role = 65",
+    "Actual offline example \u00b7 warm-path points change from 10 to 30",
+    "Offline export lanes \u00b7 check do_not_contact before sending"
+  ],
+  "evidence": [
+    {
+      "path": ".github/assets/demo/reranking.txt",
+      "contains": "Jonas Brandt,80"
+    },
+    {
+      "path": ".github/assets/demo/reranking.txt",
+      "contains": "Anna Weber,65\nJonas Brandt,60"
+    },
+    {
+      "path": ".github/assets/demo/explanation.txt",
+      "contains": "score: 65 (account 50, contact 15)"
+    },
+    {
+      "path": ".github/assets/demo/ranking.txt",
+      "contains": "call-list.csv\nnurture.csv"
+    }
+  ]
+}

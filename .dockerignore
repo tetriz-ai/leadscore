@@ -1,0 +1,17 @@
+.git
+.github
+docs
+*.md
+*.db
+*.db-*
+.env
+/out
+.claude
+.env.*
+*.pem
+gha-creds-*.json
+
+# Local credentials and quick-start data never enter the build context.
+sa-key*.json
+*.env
+/try

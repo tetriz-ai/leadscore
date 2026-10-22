@@ -1,0 +1,29 @@
+# Binaries
+/leadscore
+/bin/
+*.exe
+*.test
+*.out
+
+# Local runtime state
+/out/
+# The README quick start's folder
+/try/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+*.env
+sa-key*.json
+*.pem
+gha-creds-*.json
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local agent tooling state
+/.claude/*
+!/.claude/settings.json

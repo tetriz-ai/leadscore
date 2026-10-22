@@ -1,0 +1,51 @@
+# leadscore.yml for Docker on a server or VM with a domain
+# (docs/reference.md, "Docker"). Copy it into the folder holding compose.yaml and your rubric, as
+# leadscore.yml, and enable the compose file's Caddy service for HTTPS.
+# Every key is in docs/reference.md, "leadscore.yml".
+version: 1
+
+# The rubric file, beside this one.
+rubric: rubric.yml
+
+# SQLite on the compose file's named volume.
+store: { type: sqlite, path: /data/leadscore.db }
+
+# Your lead files, in this folder (mounted at /config).
+sources:
+  - { id: leads, type: csv, path: leads.csv }
+
+# Company facts from Apollo (name, headcount, funding stage, country), looked
+# up for your leads' companies with APOLLO_API_KEY. Each lookup spends an
+# Apollo credit; both budgets cap the spend, so a big first import spreads
+# over several days. Remove the block to use only your own columns.
+enrich: { type: apollo, max_age: 30d, max_lookups_per_run: 100, max_lookups_per_day: 400 }
+
+# The tools cold and non-cold lanes push to; each block is one tool. Remove a
+# block you do not use, and the rubric's lanes that push to it.
+sinks:
+  # Apollo sequences, with APOLLO_API_KEY (a master key). mailbox_id is the
+  # mailbox enrollments send from, by id or email address (quote it); doctor's
+  # apollo-sequences check says when it is wrong.
+  apollo: { mailbox_id: "your-mailbox-id" }
+  # HubSpot contacts and deals, with HUBSPOT_TOKEN. After adding it, run
+  # `docker compose exec leadscore leadscore setup hubspot` once.
+  # hubspot: { pipeline: Sales Pipeline, stage: Appointment scheduled }
+
+# Replies, sends and opt-outs arrive as Apollo workflow webhooks.
+replies: receiver
+
+receiver:
+  # Where Apollo posts: your domain, served by the compose file's Caddy.
+  public_url: https://leads.example.com
+  # The visit workflows you created from setup/apollo/, as visit_<name>, so a
+  # silent workflow is noticed.
+  visit_events: [visit_pricing]
+
+# The export lists, in ./out on the server.
+export: { dir: /out }
+
+# Off until you have reviewed a dry run (`leadscore run --dry-run`).
+pushes_enabled: false
+
+# How often the container runs the loop (read when it starts).
+schedule: 15m

@@ -1,0 +1,11 @@
+full_name,score
+Anna Weber,65
+Jonas Brandt,60
+Lea de Vries,50
+Pia Schulz,50
+rubric.yml: ok (version r-91146970c8582a94, 2 lanes, 0 detectors)
+full_name,score
+Jonas Brandt,80
+Anna Weber,65
+Lea de Vries,50
+Pia Schulz,50

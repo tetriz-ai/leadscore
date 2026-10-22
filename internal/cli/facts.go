@@ -1,0 +1,123 @@
+// Copyright 2026 Workloom Solutions Private Limited
+// SPDX-License-Identifier: MIT
+
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/tetriz-ai/leadscore/internal/api"
+	"github.com/tetriz-ai/leadscore/internal/model"
+)
+
+// runFacts prints the Company facts table, one row per domain sorted by
+// domain, or writes it as CSV with --csv: the table's own columns in their
+// stored order, with their stored text, so the CSV matches a `SELECT *` of the SQLite table
+// or a download of the Sheets tab. Like doctor, it never writes the store and
+// never takes the lease: SQLite is opened read-only and a missing file is not
+// created.
+func runFacts(inv *invocation) int {
+	_, b, closeStore, err := openStore(inv)
+	if err != nil {
+		return inv.fail(err)
+	}
+	defer closeStore()
+	rows, err := b.ReadTable(context.Background(), model.TableCompanyFacts)
+	if err != nil {
+		return inv.fail(fmt.Errorf("reading Company facts: %w", err))
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i]["domain"] < rows[j]["domain"] })
+
+	if _, asCSV := inv.flags["csv"]; asCSV {
+		if err := writeCSV(inv.stdout, factsColumns(rows), rows); err != nil {
+			return inv.fail(err)
+		}
+		return exitOK
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(inv.stdout, "Company facts is empty: no run has stored a company yet")
+		return exitOK
+	}
+	tw := tabwriter.NewWriter(inv.stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "domain\tenriched_at\tnot_found_at\tenrich_failed_at\tfacts")
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", printable(r["domain"]), printable(r["enriched_at"]),
+			printable(r["not_found_at"]), printable(r["enrich_failed_at"]), printable(factsSummary(r)))
+	}
+	_ = tw.Flush()
+	fmt.Fprintf(inv.stdout, "%d domain(s); `leadscore facts --csv` writes every column\n", len(rows))
+	return exitOK
+}
+
+// factsColumns is Company facts' columns in their stored order, then any
+// other column a newer version kept, sorted.
+func factsColumns(rows []api.Row) []string {
+	def, _ := model.Def(model.TableCompanyFacts)
+	cols := append([]string{}, def.Columns...)
+	known := map[string]bool{}
+	for _, col := range cols {
+		known[col] = true
+	}
+	var extra []string
+	for _, r := range rows {
+		for col := range r {
+			if !known[col] {
+				known[col] = true
+				extra = append(extra, col)
+			}
+		}
+	}
+	sort.Strings(extra)
+	return append(cols, extra...)
+}
+
+type shownFact struct {
+	Value  string `json:"value"`
+	Origin string `json:"origin"`
+}
+
+// factsSummary is a row's facts on one line, by name: value (origin), with
+// the value a change replaced, if any. A facts cell that is not the stored
+// JSON shape is shown as stored.
+func factsSummary(r api.Row) string {
+	var facts, prev map[string]shownFact
+	if s := strings.TrimSpace(r["facts"]); s != "" {
+		if err := json.Unmarshal([]byte(s), &facts); err != nil {
+			return "facts as stored: " + s
+		}
+	}
+	if s := strings.TrimSpace(r["previous"]); s != "" {
+		_ = json.Unmarshal([]byte(s), &prev) // a bad previous only loses the "was" notes
+	}
+	// A fact only in previous was removed (its Companies cell emptied).
+	var names []string
+	for n := range facts {
+		names = append(names, n)
+	}
+	for n := range prev {
+		if _, ok := facts[n]; !ok {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		part := n + "=none ("
+		if f, ok := facts[n]; ok {
+			part = fmt.Sprintf("%s=%s (%s; ", n, f.Value, f.Origin)
+		}
+		if p, ok := prev[n]; ok {
+			part += fmt.Sprintf("was %s from %s; ", p.Value, p.Origin)
+		}
+		parts = append(parts, strings.TrimSuffix(part, "; ")+")")
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
+}

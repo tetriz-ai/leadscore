@@ -1,0 +1,37 @@
+{
+  "provisional": true,
+  "note": "Not called live (enrichment spends credits). The 401 body is the one the read-only live check recorded on GET /api/v1/email_accounts with a bad key (email_accounts/bad_key), assumed the same on this path.",
+  "method": "GET",
+  "path": "/api/v1/organizations/enrich",
+  "query": {
+    "domain": "acme-robotics.example"
+  },
+  "request_headers": [
+    "Accept",
+    "Cache-Control",
+    "X-Api-Key"
+  ],
+  "request_body": null,
+  "status": 401,
+  "response_headers": {
+    "Content-Type": "application/json; charset=utf-8"
+  },
+  "response_body": {
+    "error": "Invalid API key. See https://docs.apollo.io/reference/authentication for how to authenticate.",
+    "error_details": {
+      "code": "AUTH.AUTHENTICATION.API_KEY_INVALID",
+      "context": {},
+      "message": "This API key is not valid.",
+      "suggestions": [
+        {
+          "header": "X-Api-Key",
+          "label": "Send a valid API key in the X-Api-Key header"
+        },
+        {
+          "label": "Check how to create and send an Apollo API key",
+          "url": "https://docs.apollo.io/reference/authentication"
+        }
+      ]
+    }
+  }
+}

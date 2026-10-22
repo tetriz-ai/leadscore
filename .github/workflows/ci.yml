@@ -1,0 +1,145 @@
+name: CI
+
+# Actions remains disabled; retained as a reference for local validation.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+# A newer push to a PR cancels that PR's running checks. Each push to main gets
+# its own group (keyed by commit), so no main build is cancelled or dropped.
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: build, vet, test (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The go.mod floor and the newest minor.
+        go: ["1.26.x", "1.27.x"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race ./...
+      - name: build and vet for Windows
+        run: GOOS=windows go build ./... && GOOS=windows go vet ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+      # setup/gcp.sh runs on people's machines.
+      - name: Install shellcheck 0.11.0
+        run: |
+          curl -fsSLO https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  shellcheck-v0.11.0.linux.x86_64.tar.xz" | sha256sum -c -
+          tar xJf shellcheck-v0.11.0.linux.x86_64.tar.xz --strip-components=1 shellcheck-v0.11.0/shellcheck
+      - run: ./shellcheck setup/gcp.sh scripts/*.sh testdata/gcloud/gcloud testdata/compose/smoke.sh
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+
+  # On pushes to main and the weekly schedule only, so a new advisory never
+  # fails an unrelated pull request.
+  vulncheck:
+    name: Vulnerability check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  licenses:
+    name: Third-party licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - run: go install github.com/google/go-licenses/v2@v2.0.1
+      - run: scripts/third-party-licenses.sh --check
+
+  image:
+    name: image (linux/amd64, linux/arm64)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build both architectures
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # `docker compose up` with the repo's compose.yaml and the image built from
+  # this commit, then a timer run end to end (testdata/compose).
+  compose:
+    name: docker compose up and a timer run
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build the image for this machine
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: leadscore:ci
+          cache-from: type=gha
+      - name: compose up, a webhook, and timer runs
+        run: testdata/compose/smoke.sh leadscore:ci
+
+  # Runs every example under examples/ and compares its output with its README.
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - name: Install shellcheck 0.11.0
+        run: |
+          curl -fsSLO https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  shellcheck-v0.11.0.linux.x86_64.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar xJf shellcheck-v0.11.0.linux.x86_64.tar.xz -C "$RUNNER_TEMP/bin" --strip-components=1 shellcheck-v0.11.0/shellcheck
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: scripts/run-examples.sh

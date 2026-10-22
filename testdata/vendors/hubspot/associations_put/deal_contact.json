@@ -1,0 +1,27 @@
+{
+  "method": "PUT",
+  "path": "/crm/v4/objects/deals/201/associations/default/contacts/101",
+  "query": "",
+  "request_headers": [
+    "Authorization"
+  ],
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "Content-Type": "application/json;charset=utf-8"
+  },
+  "response_body": {
+    "status": "COMPLETE",
+    "results": [
+      {
+        "fromObjectTypeId": "0-3",
+        "fromObjectId": 201,
+        "toObjectTypeId": "0-1",
+        "toObjectId": 101,
+        "labels": []
+      }
+    ]
+  },
+  "confirmed_from": "A live HubSpot call to PUT /crm/v4/objects/deals/{id}/associations/default/contacts/{id} succeeds, and repeating it is a no-op. The response body is not recorded.",
+  "provisional": true
+}

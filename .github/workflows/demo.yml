@@ -1,0 +1,40 @@
+# Renders the visual overview from actual offline sample results and uploads
+# it as an artifact. It does not commit the GIF or contact a real vendor.
+name: Demo
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/assets/render-visual-demo.py
+      - .github/assets/requirements.txt
+      - .github/assets/demo/**
+      - .github/workflows/demo.yml
+      - examples/**
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    name: Render demo.gif
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r .github/assets/requirements.txt
+      - run: |
+          examples/score-a-csv/run.sh > .github/assets/demo/ranking.txt
+          examples/explain-a-lead/run.sh > .github/assets/demo/explanation.txt
+          examples/change-the-rubric/run.sh > .github/assets/demo/reranking.txt
+      - run: python .github/assets/render-visual-demo.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: demo-gif
+          path: .github/assets/demo.gif
+          if-no-files-found: error
