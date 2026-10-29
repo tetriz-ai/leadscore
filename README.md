@@ -3,6 +3,8 @@
   <img alt="leadscore: merge leads, score them with your YAML rubric, and route each to Apollo, HubSpot or a list" src=".github/assets/banner-light.svg" width="880">
 </picture>
 
+<a href="https://www.producthunt.com/products/product-bench-gtm-engines?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-product-bench-gtm-engines" target="_blank" rel="noopener noreferrer"><img alt="Product Bench &amp; GTM Engines - AI workflows for product, content, community, and outbound | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1295907&amp;theme=light&amp;t=1793258717509"></a>
+
 <img alt="Eight sample leads become explained scores and export lists; increasing warm-path points moves Jonas from second to first" src=".github/assets/demo.gif" width="1000">
 
 Your rubric. Clear priorities. [Demo notes](.github/assets/demo/README.md).
